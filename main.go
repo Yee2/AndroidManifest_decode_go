@@ -86,7 +86,8 @@ func (attr Attribute)value(m Manifest) string {
 	case AttributeType.INT:
 		return strconv.FormatInt(int64(attr.Data),10)
 	case AttributeType.RESOURCE:
-		if prefix := m.prefix(attr.Uri); prefix != ""{
+		//fmt.Printf("RESOURCE %d :%s %+v\n",attr.Type >> 24 ,m.get(attr.Name),attr)
+		if prefix := m.prefix(attr.Uri); attr.Data >>24 == 1 && prefix != ""{
 			return fmt.Sprintf("@%s:%08X",prefix,attr.Data)
 		}
 		return fmt.Sprintf("@%08X",attr.Data)
@@ -185,7 +186,8 @@ func AndroidManifest(r io.Reader) {
 		}
 		i += ChunkSize
 	}
-	fmt.Println(res.XML.String())
+	//fmt.Println(res.XML.String())
+	ioutil.WriteFile("res.xml",res.XML.Bytes(),0655)
 	//for _, v := range res.StartTagChunk {
 	//	fmt.Printf("Name:%s\nNamespaceUri:%s\nFlag:%s\nAttributeCount:%d\n", res.get(v.Name), res.get(v.NamespaceUri), res.get(v.Flags), v.AttributeCount)
 	//	for _, attr := range v.Attributes {
