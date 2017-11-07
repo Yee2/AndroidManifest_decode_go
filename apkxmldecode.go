@@ -1,12 +1,9 @@
-package main
+package apkxmldecode
 
 import (
 	"fmt"
-	"os"
-	"archive/zip"
 	"io"
 	"io/ioutil"
-	"log"
 	"encoding/binary"
 	"bytes"
 	"math"
@@ -71,7 +68,7 @@ type StartTagChunkAttributes struct {
 	StartTagChunk
 	Attributes []Attribute
 }
-func (attr Attribute)value(m Manifest) string {
+func (attr Attribute)value(m *Manifest) string {
 	switch attr.Type {
 	case AttributeType.BOOLEAN:
 		if attr.Value != 0{
@@ -123,41 +120,24 @@ var AttributeType = struct {
 	0x1D000008,
 }
 var indent int
-func main() {
-	rd, err := zip.OpenReader("Stk.apk")
-	checkErr(err)
-	defer rd.Close()
-	for _, file := range rd.File {
-		if "AndroidManifest.xml" == file.Name {
-			f, _ := file.Open()
-			AndroidManifest(f)
-			defer f.Close()
-		}
-	}
-}
-func checkErr(err error) {
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(-1)
-	}
-}
 
-func AndroidManifest(r io.Reader) {
+func New(r io.Reader)(*Manifest, error) {
 	var offset uint32
 	data, err := ioutil.ReadAll(r)
-	checkErr(err)
+	if err != nil{
+		return nil,err
+	}
 	//reader := bytes.NewReader(data)
 	MagicNumber := data[offset:offset+4]
 	offset += 4
-	if string(MagicNumber) != string([]byte{0x03, 0x00, 0x08, 0x00}) {
-		log.Fatal("错误格式！")
+	if binary.LittleEndian.Uint32(MagicNumber) != 0x00080003  {
+		return nil,errors.New("wrong format!")
 	}
 	FileSize := binary.LittleEndian.Uint32(data[4:8])
 	offset += 4
 	fmt.Printf("file size:%d byte\n", FileSize)
 
-	var res Manifest
-	res.XML = new(bytes.Buffer)
+	var res  = &Manifest{XML:new(bytes.Buffer)}
 	res.XML.Write([]byte("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"))
 	indent = -4
 	for i := offset; int(i) < len(data); {
@@ -179,26 +159,22 @@ func AndroidManifest(r io.Reader) {
 		case 0x00100102:
 			a, b := chunkStratTag(Chunk)
 			res.StartTagChunk = append(res.StartTagChunk, StartTagChunkAttributes{StartTagChunk: a, Attributes: b})
-			add2xml(res.XML,res,StartTagChunkAttributes{StartTagChunk: a, Attributes: b})
+			if err = add2xml(res.XML,res,StartTagChunkAttributes{StartTagChunk: a, Attributes: b}); err != nil {
+				return nil,err;
+			}
 		case 0x00100103:
 			endtag := chunkEndTag(Chunk)
 			add2xml(res.XML,res,endtag)
 		}
 		i += ChunkSize
 	}
-	//fmt.Println(res.XML.String())
-	ioutil.WriteFile("res.xml",res.XML.Bytes(),0655)
-	//for _, v := range res.StartTagChunk {
-	//	fmt.Printf("Name:%s\nNamespaceUri:%s\nFlag:%s\nAttributeCount:%d\n", res.get(v.Name), res.get(v.NamespaceUri), res.get(v.Flags), v.AttributeCount)
-	//	for _, attr := range v.Attributes {
-	//		if prefix := res.prefix(attr.Uri); prefix != "" {
-	//			fmt.Printf("name:%s:%s value:%s type:%08X\n", res.prefix(attr.Uri), res.get(attr.Name), attr.value(res), attr.Type)
-	//		} else {
-	//			fmt.Printf("name:%s value:%s type:%08X\n", res.get(attr.Name), attr.value(res), attr.Type)
-	//		}
-	//	}
-	//	fmt.Print("\n")
-	//}
+	return res,nil
+}
+func (m Manifest) String()string{
+	return m.XML.String()
+}
+func (m Manifest) Read(p []byte)(int,error){
+	return m.XML.Read(p)
 }
 func (m Manifest) get(index uint32) (string) {
 	if len(m.Strings) > int(index) {
@@ -218,46 +194,59 @@ func (m Manifest) prefix(index uint32) (string) {
 	}
 	return ""
 }
-func add2xml(writer io.Writer, m Manifest,tag interface{}) error {
+func add2xml(writer io.Writer, m *Manifest,tag interface{}) error {
 	switch t := tag.(type) {
 	case StartTagChunkAttributes:
 		if name := m.get(t.Name); name != ""{
 			indent += 4
-			writer.Write([]byte(fmt.Sprintf("%s<%s ",strings.Repeat(" ",indent),name)))
+			writer.Write([]byte(fmt.Sprintf("%s<%s",strings.Repeat(" ",indent),name)))
 			indent += 4
+			nobr := true
 			if name == "manifest"{
 				for _, v := range m.Namespace {
+					if nobr{
+						writer.Write([]byte(" "))
+						nobr = false
+					}else{
+						writer.Write([]byte("\n" + strings.Repeat(" ",indent)))
+					}
 					// FIXME: 使用更优雅的实现方式
 					if len(m.Strings) > int(v.Prefix) && len(m.Strings) > int(v.Uri) {
-						writer.Write([]byte(fmt.Sprintf("\n%sxmlns:%s=\"%s\"",strings.Repeat(" ",indent),m.Strings[v.Prefix],m.Strings[v.Uri])))
+						writer.Write([]byte(fmt.Sprintf("xmlns:%s=\"%s\"",m.Strings[v.Prefix],m.Strings[v.Uri])))
 					}
 				}
 			}
 			for _,attr := range t.Attributes{
 				attrName := m.get(attr.Name)
 				if attrName == ""{
-					return errors.New("获取标签名称失败")
+					return errors.New("Failed to get label name.")
+				}
+				if nobr{
+					writer.Write([]byte(" "))
+					nobr = false
+				}else{
+					writer.Write([]byte("\n" + strings.Repeat(" ",indent)))
 				}
 				if prefix := m.prefix(attr.Uri); prefix != ""{
-					writer.Write([]byte(fmt.Sprintf("\n%s%s:%s=\"%s\"",strings.Repeat(" ",indent),prefix,attrName,attr.value(m))))
+					writer.Write([]byte(fmt.Sprintf("%s:%s=\"%s\"",prefix,attrName,attr.value(m))))
 				}else{
-					writer.Write([]byte(fmt.Sprintf("\n%s=\"%s\"",attrName,attr.value(m))))
+					writer.Write([]byte(fmt.Sprintf("%s=\"%s\"",attrName,attr.value(m))))
 				}
 			}
 			indent -= 4
 			writer.Write([]byte(fmt.Sprintf(">\n")))
 		}else{
-			return errors.New("获取标签名称失败")
+			return errors.New("Failed to get label name.")
 		}
 	case EndTagChunk:
 		if name := m.get(t.Name); name != ""{
 			writer.Write([]byte(fmt.Sprintf("%s</%s>\n",strings.Repeat(" ",indent),name)))
 		}else{
-			return errors.New("获取标签名称失败")
+			return errors.New("Failed to get label name.")
 		}
 		indent -= 4
 	default:
-		return errors.New("错误数据")
+		return errors.New("Wrong data")
 	}
 	return nil
 }
