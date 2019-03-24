@@ -1,3 +1,5 @@
+Google 自家的实现:[https://godoc.org/github.com/google/gapid/core/os/android/binaryxml](https://godoc.org/github.com/google/gapid/core/os/android/binaryxml)
+
 # AndroidManifest decode
 
 ### 介绍
